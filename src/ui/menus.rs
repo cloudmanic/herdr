@@ -246,3 +246,51 @@ pub(super) fn render_context_menu(app: &AppState, frame: &mut Frame) {
     let mut state = ListState::default().with_selected(Some(menu.list.highlighted));
     frame.render_stateful_widget(list, inner, &mut state);
 }
+
+/// Renders a centered modal listing hidden workspaces for reveal.
+pub(super) fn render_reveal_workspace_overlay(app: &AppState, frame: &mut Frame) {
+    let items: Vec<(usize, String)> = app
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(_, ws)| app.hidden_workspace_ids.contains(&ws.id))
+        .map(|(idx, ws)| (idx, ws.display_name()))
+        .collect();
+    if items.is_empty() {
+        return;
+    }
+
+    let p = &app.palette;
+    let screen = frame.area();
+    let content_width = items
+        .iter()
+        .map(|(_, name)| name.len() as u16 + 2)
+        .max()
+        .unwrap_or(14)
+        .max(14);
+    let popup_width = (content_width + 2).min(screen.width.saturating_sub(4));
+    let popup_height = (items.len() as u16 + 2).min(screen.height.saturating_sub(4));
+    let popup_x = screen.x + (screen.width.saturating_sub(popup_width)) / 2;
+    let popup_y = screen.y + (screen.height.saturating_sub(popup_height)) / 2;
+    let popup = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    let Some(inner) = render_panel_shell(frame, popup, p.accent, p.panel_bg) else {
+        return;
+    };
+
+    let list_items: Vec<ListItem> = items
+        .iter()
+        .map(|(_, name)| ListItem::new(format!(" {name} ")))
+        .collect();
+    let list = List::new(list_items)
+        .style(Style::default().fg(p.text))
+        .highlight_style(
+            Style::default()
+                .bg(p.accent)
+                .fg(panel_contrast_fg(p))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(" ");
+    let mut state = ListState::default().with_selected(Some(app.reveal_workspace.highlighted));
+    frame.render_stateful_widget(list, inner, &mut state);
+}

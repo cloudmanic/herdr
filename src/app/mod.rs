@@ -241,6 +241,7 @@ impl App {
             sidebar_width_source,
             sidebar_section_split,
             collapsed_space_keys,
+            hidden_workspace_ids,
         ) = if no_session {
             (
                 Vec::new(),
@@ -250,6 +251,7 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                std::collections::HashSet::new(),
                 std::collections::HashSet::new(),
             )
         } else if let Some(snap) = crate::persist::load() {
@@ -287,6 +289,7 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    snap.hidden_workspace_ids,
                 )
             } else {
                 crate::logging::session_restored(ws.len(), "ok");
@@ -305,6 +308,7 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    snap.hidden_workspace_ids,
                 )
             }
         } else {
@@ -316,6 +320,7 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                std::collections::HashSet::new(),
                 std::collections::HashSet::new(),
             )
         };
@@ -396,6 +401,7 @@ impl App {
             worktree_remove: None,
             worktree_directory,
             collapsed_space_keys,
+            hidden_workspace_ids,
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -412,6 +418,7 @@ impl App {
             }),
             keybind_help: state::KeybindHelpState { scroll: 0 },
             navigator: state::NavigatorState::default(),
+            reveal_workspace: state::MenuListState::new(0),
             workspace_scroll: 0,
             agent_panel_scroll: 0,
             tab_scroll: 0,
@@ -1230,6 +1237,9 @@ impl App {
             }
             Mode::GlobalMenu => {
                 input::handle_global_menu_key(&mut self.state, key_event);
+            }
+            Mode::RevealWorkspace => {
+                input::handle_reveal_workspace_key(&mut self.state, key_event);
             }
             Mode::Onboarding => {
                 self.handle_onboarding_key(key_event);

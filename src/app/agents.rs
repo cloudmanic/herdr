@@ -9,6 +9,7 @@ impl App {
             .workspaces
             .iter()
             .enumerate()
+            .filter(|(_, ws)| !self.state.hidden_workspace_ids.contains(&ws.id))
             .flat_map(|(ws_idx, ws)| {
                 ws.tabs.iter().flat_map(move |tab| {
                     tab.layout
