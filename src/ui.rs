@@ -27,7 +27,7 @@ use self::dialogs::{
 use self::keybind_help::render_keybind_help_overlay;
 use self::menus::{
     render_context_menu, render_global_launcher_menu, render_navigate_overlay,
-    render_prefix_overlay, render_resize_overlay,
+    render_prefix_overlay, render_resize_overlay, render_reveal_workspace_overlay,
 };
 use self::mobile::{
     compute_mobile_header_hit_areas, is_mobile_width, mobile_switcher_max_scroll_for_height,
@@ -394,6 +394,7 @@ pub fn render_with_runtime_registry(
         }
         Mode::ConfirmRemoveWorktree => render_remove_worktree_overlay(app, frame, frame.area()),
         Mode::GlobalMenu => render_global_launcher_menu(app, frame),
+        Mode::RevealWorkspace => render_reveal_workspace_overlay(app, frame),
         Mode::KeybindHelp => render_keybind_help_overlay(app, frame),
         Mode::Navigator => render_navigator_overlay(app, frame),
         Mode::Terminal => {}

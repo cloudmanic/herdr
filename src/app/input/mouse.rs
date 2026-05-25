@@ -131,6 +131,60 @@ impl AppState {
             return None;
         }
 
+        if self.mode == Mode::RevealWorkspace {
+            if matches!(mouse.kind, MouseEventKind::Moved) {
+                if let Some((inner, count)) = self.reveal_popup_inner() {
+                    let col = mouse.column;
+                    let row = mouse.row;
+                    if col >= inner.x
+                        && col < inner.x + inner.width
+                        && row >= inner.y
+                        && row < inner.y + inner.height
+                    {
+                        let idx = (row - inner.y) as usize;
+                        if idx < count {
+                            self.reveal_workspace.highlighted = idx;
+                        }
+                    }
+                }
+                return None;
+            }
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                if let Some((inner, count)) = self.reveal_popup_inner() {
+                    let col = mouse.column;
+                    let row = mouse.row;
+                    if col >= inner.x
+                        && col < inner.x + inner.width
+                        && row >= inner.y
+                        && row < inner.y + inner.height
+                    {
+                        let idx = (row - inner.y) as usize;
+                        if idx < count {
+                            let hidden: Vec<String> = self
+                                .workspaces
+                                .iter()
+                                .filter(|ws| self.hidden_workspace_ids.contains(&ws.id))
+                                .map(|ws| ws.id.clone())
+                                .collect();
+                            if let Some(ws_id) = hidden.get(idx) {
+                                self.hidden_workspace_ids.remove(ws_id);
+                                let ws_idx = self.workspaces.iter().position(|ws| &ws.id == ws_id);
+                                if let Some(ws_idx) = ws_idx {
+                                    self.active = Some(ws_idx);
+                                    self.selected = ws_idx;
+                                    self.ensure_workspace_visible(ws_idx);
+                                    self.tab_scroll_follow_active = true;
+                                }
+                                self.mark_session_dirty();
+                            }
+                        }
+                    }
+                }
+                leave_modal(self);
+            }
+            return None;
+        }
+
         if self.view.layout == ViewLayout::Mobile && self.handle_mobile_mouse(mouse) {
             return None;
         }
@@ -473,6 +527,18 @@ impl AppState {
                         && mouse.column < new_button.x + new_button.width;
                     if on_new_button {
                         self.request_new_workspace = true;
+                        return None;
+                    }
+
+                    let hidden_hint = self.hidden_hint_rect();
+                    if hidden_hint != Rect::default()
+                        && mouse.row >= hidden_hint.y
+                        && mouse.row < hidden_hint.y + hidden_hint.height
+                        && mouse.column >= hidden_hint.x
+                        && mouse.column < hidden_hint.x + hidden_hint.width
+                    {
+                        self.reveal_workspace = crate::app::state::MenuListState::new(0);
+                        self.mode = Mode::RevealWorkspace;
                         return None;
                     }
 
@@ -1068,6 +1134,39 @@ impl AppState {
         let right = (sidebar.x + sidebar.width).max(terminal.x + terminal.width);
         let bottom = (sidebar.y + sidebar.height).max(terminal.y + terminal.height);
         Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+    }
+
+    /// Returns the inner content rect of the reveal-workspace popup and the
+    /// number of items it contains, for mouse hit-testing.
+    fn reveal_popup_inner(&self) -> Option<(Rect, usize)> {
+        let count = self
+            .workspaces
+            .iter()
+            .filter(|ws| self.hidden_workspace_ids.contains(&ws.id))
+            .count();
+        if count == 0 {
+            return None;
+        }
+        let screen = self.screen_rect();
+        let content_width = self
+            .workspaces
+            .iter()
+            .filter(|ws| self.hidden_workspace_ids.contains(&ws.id))
+            .map(|ws| ws.display_name().len() as u16 + 2)
+            .max()
+            .unwrap_or(14)
+            .max(14);
+        let popup_width = (content_width + 2).min(screen.width.saturating_sub(4));
+        let popup_height = (count as u16 + 2).min(screen.height.saturating_sub(4));
+        let popup_x = screen.x + (screen.width.saturating_sub(popup_width)) / 2;
+        let popup_y = screen.y + (screen.height.saturating_sub(popup_height)) / 2;
+        let inner = Rect::new(
+            popup_x + 1,
+            popup_y + 1,
+            popup_width.saturating_sub(2),
+            popup_height.saturating_sub(2),
+        );
+        Some((inner, count))
     }
 
     pub(crate) fn context_menu_rect(&self) -> Option<Rect> {
@@ -1942,7 +2041,7 @@ mod tests {
             kind: ContextMenuKind::Workspace { ws_idx: 1 },
             x: 2,
             y: 2,
-            list: MenuListState::new(1),
+            list: MenuListState::new(2),
         });
         app.state.mode = Mode::ContextMenu;
         handle_context_menu_key(

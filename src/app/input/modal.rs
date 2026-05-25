@@ -152,6 +152,40 @@ pub(crate) fn handle_global_menu_key(state: &mut AppState, key: KeyEvent) {
     }
 }
 
+/// Returns the ordered list of hidden workspace IDs for the reveal modal.
+fn hidden_workspace_list(state: &AppState) -> Vec<(usize, String)> {
+    state
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(_, ws)| state.hidden_workspace_ids.contains(&ws.id))
+        .map(|(idx, ws)| (idx, ws.display_name()))
+        .collect()
+}
+
+pub(crate) fn handle_reveal_workspace_key(state: &mut AppState, key: KeyEvent) {
+    let items = hidden_workspace_list(state);
+    match key.code {
+        KeyCode::Esc => leave_modal(state),
+        KeyCode::Up | KeyCode::Char('k') => state.reveal_workspace.move_prev(),
+        KeyCode::Down | KeyCode::Char('j') => state.reveal_workspace.move_next(items.len()),
+        KeyCode::Enter => {
+            if let Some((ws_idx, _)) = items.get(state.reveal_workspace.highlighted) {
+                let ws_idx = *ws_idx;
+                let ws_id = state.workspaces[ws_idx].id.clone();
+                state.hidden_workspace_ids.remove(&ws_id);
+                state.active = Some(ws_idx);
+                state.selected = ws_idx;
+                state.ensure_workspace_visible(ws_idx);
+                state.tab_scroll_follow_active = true;
+                state.mark_session_dirty();
+            }
+            leave_modal(state);
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn handle_navigator_key(state: &mut AppState, key: KeyEvent) {
     if state.navigator.search_focused {
         match key.code {
@@ -654,6 +688,42 @@ pub(super) fn apply_context_menu_action(
                 }
                 state.mark_session_dirty();
             }
+            leave_modal(state);
+        }
+        (
+            ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            Some("Hide"),
+        ) => {
+            let ws_id = state.workspaces[ws_idx].id.clone();
+            state.hidden_workspace_ids.insert(ws_id);
+            if state.active == Some(ws_idx) {
+                let next_visible = state
+                    .workspaces
+                    .iter()
+                    .enumerate()
+                    .find(|(idx, ws)| {
+                        *idx != ws_idx && !state.hidden_workspace_ids.contains(&ws.id)
+                    })
+                    .map(|(idx, _)| idx);
+                state.active = next_visible;
+                if let Some(idx) = next_visible {
+                    state.selected = idx;
+                    state.ensure_workspace_visible(idx);
+                    state.tab_scroll_follow_active = true;
+                }
+            }
+            if state.selected == ws_idx {
+                let next_visible = state
+                    .workspaces
+                    .iter()
+                    .enumerate()
+                    .find(|(_, ws)| !state.hidden_workspace_ids.contains(&ws.id))
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                state.selected = next_visible;
+                state.ensure_workspace_visible(next_visible);
+            }
+            state.mark_session_dirty();
             leave_modal(state);
         }
         (
@@ -1245,7 +1315,7 @@ mod tests {
         };
         let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
 
-        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, 1);
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, 2);
 
         assert_eq!(state.selected, 0);
         assert_eq!(state.mode, Mode::ConfirmClose);
@@ -1254,5 +1324,106 @@ mod tests {
 
         assert!(state.workspaces.is_empty());
         assert_eq!(state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn context_menu_hide_adds_workspace_to_hidden_set() {
+        let mut state = state_with_workspaces(&["alpha", "beta", "gamma"]);
+        state.active = Some(1);
+        state.selected = 1;
+        let ws_id = state.workspaces[1].id.clone();
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Workspace { ws_idx: 1 },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, 1);
+
+        assert!(state.hidden_workspace_ids.contains(&ws_id));
+        assert_eq!(state.workspaces.len(), 3);
+    }
+
+    #[test]
+    fn hide_active_workspace_switches_to_next_visible() {
+        let mut state = state_with_workspaces(&["alpha", "beta", "gamma"]);
+        state.active = Some(0);
+        state.selected = 0;
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Workspace { ws_idx: 0 },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, 1);
+
+        assert_eq!(state.active, Some(1));
+        assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    fn hide_all_workspaces_sets_active_to_none() {
+        let mut state = state_with_workspaces(&["only"]);
+        state.active = Some(0);
+        state.selected = 0;
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Workspace { ws_idx: 0 },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, 1);
+
+        assert_eq!(state.active, None);
+    }
+
+    #[test]
+    fn reveal_workspace_unhides_and_activates() {
+        let mut state = state_with_workspaces(&["alpha", "beta"]);
+        let ws_id = state.workspaces[1].id.clone();
+        state.hidden_workspace_ids.insert(ws_id.clone());
+        state.active = Some(0);
+        state.selected = 0;
+        state.mode = Mode::RevealWorkspace;
+        state.reveal_workspace = MenuListState::new(0);
+
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        handle_reveal_workspace_key(&mut state, key);
+
+        assert!(!state.hidden_workspace_ids.contains(&ws_id));
+        assert_eq!(state.active, Some(1));
+        assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    fn reveal_workspace_esc_keeps_workspace_hidden() {
+        let mut state = state_with_workspaces(&["alpha", "beta"]);
+        let ws_id = state.workspaces[1].id.clone();
+        state.hidden_workspace_ids.insert(ws_id.clone());
+        state.active = Some(0);
+        state.mode = Mode::RevealWorkspace;
+        state.reveal_workspace = MenuListState::new(0);
+
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+        handle_reveal_workspace_key(&mut state, key);
+
+        assert!(state.hidden_workspace_ids.contains(&ws_id));
+    }
+
+    #[test]
+    fn hidden_workspace_ids_persisted_in_snapshot() {
+        let mut state = state_with_workspaces(&["alpha", "beta"]);
+        let ws_id = state.workspaces[0].id.clone();
+        state.hidden_workspace_ids.insert(ws_id.clone());
+
+        let snapshot = capture_snapshot(&state);
+
+        assert!(snapshot.hidden_workspace_ids.contains(&ws_id));
     }
 }

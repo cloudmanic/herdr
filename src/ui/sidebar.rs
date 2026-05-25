@@ -160,6 +160,7 @@ fn agent_panel_entries_with_runtimes(
             .workspaces
             .iter()
             .enumerate()
+            .filter(|(_, ws)| !app.hidden_workspace_ids.contains(&ws.id))
             .flat_map(|(ws_idx, ws)| {
                 let multi_tab = ws.tabs.len() > 1;
                 let workspace_label = ws.display_name_from(&app.terminals, terminal_runtimes);
@@ -370,6 +371,9 @@ pub(crate) fn workspace_list_entries(app: &AppState) -> Vec<WorkspaceListEntry> 
     let mut emitted_groups = std::collections::HashSet::<String>::new();
     let mut entries = Vec::new();
     for (ws_idx, ws) in app.workspaces.iter().enumerate() {
+        if app.hidden_workspace_ids.contains(&ws.id) {
+            continue;
+        }
         let Some(space) = ws
             .worktree_space()
             .filter(|space| grouped_keys.contains(&space.key))
@@ -400,6 +404,12 @@ pub(crate) fn workspace_list_entries(app: &AppState) -> Vec<WorkspaceListEntry> 
             });
             continue;
         };
+        if app
+            .hidden_workspace_ids
+            .contains(&app.workspaces[parent_idx].id)
+        {
+            continue;
+        }
         let collapsed = app.collapsed_space_keys.contains(&space.key);
         entries.push(WorkspaceListEntry::Workspace {
             ws_idx: parent_idx,
@@ -410,6 +420,7 @@ pub(crate) fn workspace_list_entries(app: &AppState) -> Vec<WorkspaceListEntry> 
             if let Some(active_idx) = visible_group_idx
                 .filter(|idx| *idx != parent_idx)
                 .filter(|_| active_group.as_deref() == Some(space.key.as_str()))
+                .filter(|idx| !app.hidden_workspace_ids.contains(&app.workspaces[*idx].id))
             {
                 entries.push(WorkspaceListEntry::Workspace {
                     ws_idx: active_idx,
@@ -419,6 +430,12 @@ pub(crate) fn workspace_list_entries(app: &AppState) -> Vec<WorkspaceListEntry> 
         } else {
             for member_idx in members {
                 if *member_idx == parent_idx {
+                    continue;
+                }
+                if app
+                    .hidden_workspace_ids
+                    .contains(&app.workspaces[*member_idx].id)
+                {
                     continue;
                 }
                 entries.push(WorkspaceListEntry::Workspace {
@@ -1013,6 +1030,24 @@ fn render_workspace_list(
             Paragraph::new(Span::styled(" new", Style::default().fg(p.overlay0))),
             new_rect,
         );
+
+        let hidden_count = app.hidden_workspace_ids.len();
+        if hidden_count > 0 {
+            let footer = app.sidebar_footer_rect();
+            let hint = format!("({hidden_count} hidden)");
+            let hint_width = hint.len() as u16;
+            let new_end = new_rect.x + new_rect.width;
+            let menu_start = app.global_launcher_rect().x;
+            let available = menu_start.saturating_sub(new_end);
+            if available >= hint_width {
+                let hint_x = new_end + (available.saturating_sub(hint_width)) / 2;
+                let hint_rect = Rect::new(hint_x, footer.y, hint_width, 1);
+                frame.render_widget(
+                    Paragraph::new(Span::styled(hint, Style::default().fg(p.overlay0))),
+                    hint_rect,
+                );
+            }
+        }
 
         let menu_rect = app.global_launcher_rect();
         let menu_line = if app.global_menu_attention_badge_visible() {
@@ -1689,5 +1724,84 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn hidden_workspace_excluded_from_workspace_list_entries() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            Workspace::test_new("alpha"),
+            Workspace::test_new("beta"),
+            Workspace::test_new("gamma"),
+        ];
+        app.hidden_workspace_ids
+            .insert(app.workspaces[1].id.clone());
+
+        let entries = workspace_list_entries(&app);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries,
+            vec![
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn hidden_worktree_parent_hides_entire_group() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            workspace_with_worktree_space("main", Some("repo-key"), "/repo/herdr"),
+            workspace_with_worktree_space("issue", Some("repo-key"), "/repo/herdr-issue"),
+            Workspace::test_new("notes"),
+        ];
+        app.hidden_workspace_ids
+            .insert(app.workspaces[0].id.clone());
+
+        let entries = workspace_list_entries(&app);
+
+        assert_eq!(
+            entries,
+            vec![WorkspaceListEntry::Workspace {
+                ws_idx: 2,
+                indented: false
+            },]
+        );
+    }
+
+    #[test]
+    fn hidden_workspace_excluded_from_all_workspaces_agent_panel() {
+        let mut app = AppState::test_new();
+        let first = Workspace::test_new("visible");
+        let first_pane = first.tabs[0].root_pane;
+        let second = Workspace::test_new("hidden");
+        let second_pane = second.tabs[0].root_pane;
+
+        app.workspaces = vec![first, second];
+        app.ensure_test_terminals();
+        let first_tid = app.workspaces[0].tabs[0].panes[&first_pane]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&first_tid).unwrap().detected_agent = Some(Agent::Claude);
+        let second_tid = app.workspaces[1].tabs[0].panes[&second_pane]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&second_tid).unwrap().detected_agent = Some(Agent::Pi);
+        app.hidden_workspace_ids
+            .insert(app.workspaces[1].id.clone());
+        app.agent_panel_scope = AgentPanelScope::AllWorkspaces;
+
+        let entries = agent_panel_entries(&app);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].primary_label, "visible");
     }
 }

@@ -196,6 +196,26 @@ impl AppState {
         Rect::new(x, footer.y, width, footer.height)
     }
 
+    pub(crate) fn hidden_hint_rect(&self) -> Rect {
+        if self.hidden_workspace_ids.is_empty() {
+            return Rect::default();
+        }
+        let footer = self.sidebar_footer_rect();
+        let new_rect = self.sidebar_new_button_rect();
+        let menu_rect = self.global_launcher_rect();
+        let hint = format!("({} hidden)", self.hidden_workspace_ids.len());
+        let hint_width = hint.len() as u16;
+        let new_end = new_rect.x + new_rect.width;
+        let menu_start = menu_rect.x;
+        let available = menu_start.saturating_sub(new_end);
+        if available >= hint_width {
+            let hint_x = new_end + (available.saturating_sub(hint_width)) / 2;
+            Rect::new(hint_x, footer.y, hint_width, 1)
+        } else {
+            Rect::default()
+        }
+    }
+
     pub(crate) fn global_menu_labels(&self) -> Vec<&'static str> {
         let mut labels = vec!["settings", "keybinds", "reload config"];
         if self.update_available.is_some() {
@@ -332,6 +352,7 @@ impl AppState {
                 | Mode::ContextMenu
                 | Mode::Settings
                 | Mode::GlobalMenu
+                | Mode::RevealWorkspace
                 | Mode::KeybindHelp
         ) {
             Some(self.selected)
