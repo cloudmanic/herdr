@@ -75,7 +75,7 @@ pub(crate) use self::{
     },
 };
 pub(crate) use self::{
-    keybind_help::keybind_help_lines,
+    keybind_help::{keybind_help_rows, KeybindHelpAction},
     mobile::{
         mobile_switcher_areas, mobile_switcher_max_scroll, mobile_switcher_target_at,
         mobile_switcher_workspace_doc_range, MobileSwitcherTarget,
@@ -1023,34 +1023,34 @@ mod tests {
 
         assert!(workspace_tab
             .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "previous workspace"));
+            .any(|(key, label, _)| key == "unset" && label.as_ref() == "previous workspace"));
         assert!(workspace_tab
             .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "next workspace"));
+            .any(|(key, label, _)| key == "unset" && label.as_ref() == "next workspace"));
         assert!(workspace_tab
             .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "previous agent"));
+            .any(|(key, label, _)| key == "unset" && label.as_ref() == "previous agent"));
         assert!(workspace_tab
             .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "next agent"));
+            .any(|(key, label, _)| key == "unset" && label.as_ref() == "next agent"));
         assert!(workspace_tab
             .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "focus agent 1-9"));
+            .any(|(key, label, _)| key == "unset" && label.as_ref() == "focus agent 1-9"));
         assert!(workspace_tab
             .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "switch workspace 1-9"));
+            .any(|(key, label, _)| key == "unset" && label.as_ref() == "switch workspace 1-9"));
         assert!(panes
             .iter()
-            .any(|(key, label)| key == "prefix+h" && label.as_ref() == "focus pane left"));
+            .any(|(key, label, _)| key == "prefix+h" && label.as_ref() == "focus pane left"));
         assert!(panes
             .iter()
-            .any(|(key, label)| key == "prefix+j" && label.as_ref() == "focus pane down"));
+            .any(|(key, label, _)| key == "prefix+j" && label.as_ref() == "focus pane down"));
         assert!(panes
             .iter()
-            .any(|(key, label)| key == "prefix+k" && label.as_ref() == "focus pane up"));
+            .any(|(key, label, _)| key == "prefix+k" && label.as_ref() == "focus pane up"));
         assert!(panes
             .iter()
-            .any(|(key, label)| key == "prefix+l" && label.as_ref() == "focus pane right"));
+            .any(|(key, label, _)| key == "prefix+l" && label.as_ref() == "focus pane right"));
     }
 
     #[test]
@@ -1082,14 +1082,14 @@ mod tests {
             .clone();
         assert!(custom
             .iter()
-            .any(|(key, label)| key == "prefix+alt+g" && label.as_ref() == "open lazygit"));
+            .any(|(key, label, _)| key == "prefix+alt+g" && label.as_ref() == "open lazygit"));
         assert!(custom
             .iter()
-            .any(|(key, label)| key == "prefix+alt+h" && label.as_ref() == "custom command"));
+            .any(|(key, label, _)| key == "prefix+alt+h" && label.as_ref() == "custom command"));
 
-        let rendered_help = keybind_help_lines(&app)
+        let rendered_help = keybind_help_rows(&app)
             .into_iter()
-            .flat_map(|(_, line)| line.spans)
+            .flat_map(|row| row.line.spans)
             .map(|span| span.content.into_owned())
             .collect::<Vec<_>>()
             .join("");

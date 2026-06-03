@@ -54,6 +54,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::events::AppEvent;
 
+pub(crate) use input::NavigateAction;
 pub use state::{AppState, Mode, ToastKind, ViewState};
 
 /// Full application: AppState + runtime concerns (event channels, async I/O).
@@ -443,7 +444,10 @@ impl App {
                     preview: announcement.preview,
                 }
             }),
-            keybind_help: state::KeybindHelpState { scroll: 0 },
+            keybind_help: state::KeybindHelpState {
+                scroll: 0,
+                hovered: None,
+            },
             navigator: state::NavigatorState::default(),
             copy_mode: None,
             workspace_scroll: 0,

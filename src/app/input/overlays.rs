@@ -8,9 +8,11 @@ use crate::app::{
     state::{AppState, DragState, DragTarget, Mode, NavigatorTarget},
     App,
 };
+use crate::ui::KeybindHelpAction;
 
 use super::{
     modal::{leave_modal, modal_action_from_buttons, ModalAction},
+    navigate::{execute_navigate_action_in_context, ActionContext, NavigateAction},
     ScrollbarClickTarget,
 };
 
@@ -202,6 +204,10 @@ impl App {
                                     .set_keybind_help_offset_from_bottom(offset_from_bottom);
                             }
                         }
+                    } else if let Some(action) =
+                        self.state.keybind_help_action_at(mouse.column, mouse.row)
+                    {
+                        self.run_keybind_help_action(action);
                     } else {
                         let rect = self.state.keybind_help_popup_rect();
                         let inside = mouse.column >= rect.x
@@ -230,14 +236,65 @@ impl App {
                 MouseEventKind::Up(MouseButton::Left) => {
                     self.state.drag = None;
                 }
-                MouseEventKind::ScrollUp => self.state.scroll_keybind_help(-3),
-                MouseEventKind::ScrollDown => self.state.scroll_keybind_help(3),
+                MouseEventKind::Moved => {
+                    self.state
+                        .update_keybind_help_hover(mouse.column, mouse.row);
+                }
+                MouseEventKind::ScrollUp => {
+                    self.state.scroll_keybind_help(-3);
+                    self.state
+                        .update_keybind_help_hover(mouse.column, mouse.row);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.state.scroll_keybind_help(3);
+                    self.state
+                        .update_keybind_help_hover(mouse.column, mouse.row);
+                }
                 _ => {}
             }
             return true;
         }
 
         false
+    }
+
+    // Run the action attached to a clicked row in the keybinds overlay. Built-in
+    // actions are dispatched exactly as if their keybind had been pressed; custom
+    // commands are launched by their index. The overlay always closes afterwards.
+    fn run_keybind_help_action(&mut self, action: KeybindHelpAction) {
+        let context = if self.state.active.is_some() {
+            ActionContext::Direct
+        } else {
+            ActionContext::Navigate
+        };
+        match action {
+            // Edit scrollback opens an external editor in a new pane and needs
+            // the App-level helper rather than the plain state dispatcher.
+            KeybindHelpAction::Navigate(NavigateAction::EditScrollback) => {
+                self.launch_focused_scrollback_editor();
+            }
+            KeybindHelpAction::Navigate(nav) => {
+                execute_navigate_action_in_context(
+                    &mut self.state,
+                    &mut self.terminal_runtimes,
+                    nav,
+                    context,
+                );
+            }
+            KeybindHelpAction::CustomCommand(idx) => {
+                if let Some(binding) = self.state.keybinds.custom_commands.get(idx).cloned() {
+                    self.launch_custom_command(binding, context);
+                }
+            }
+        }
+
+        // Safety net: a successful action transitions out of the overlay (into a
+        // pane, another modal, etc.). If we're somehow still here — e.g. an action
+        // that didn't apply in the current context — close the overlay so the
+        // click is never a no-op that traps the user.
+        if self.state.mode == Mode::KeybindHelp {
+            leave_modal(&mut self.state);
+        }
     }
 }
 
@@ -620,9 +677,9 @@ impl AppState {
         let body = self.keybind_help_body_rect()?;
         let viewport_rows = body.height.max(1) as usize;
         let wrap_width = body.width.max(1) as usize;
-        let total_rows = crate::ui::keybind_help_lines(self)
+        let total_rows = crate::ui::keybind_help_rows(self)
             .into_iter()
-            .map(|(width, _)| width.max(1).div_ceil(wrap_width))
+            .map(|row| row.width.max(1).div_ceil(wrap_width))
             .sum::<usize>();
         let max_offset_from_bottom = total_rows.saturating_sub(viewport_rows);
         Some(crate::pane::ScrollMetrics {
@@ -680,6 +737,58 @@ impl AppState {
         let max_scroll = self.keybind_help_max_scroll();
         let current = self.keybind_help.scroll as i16;
         self.keybind_help.scroll = current.saturating_add(delta).clamp(0, max_scroll as i16) as u16;
+    }
+
+    // The clickable text column of the keybinds overlay: the body rect minus the
+    // scrollbar column when a scrollbar is shown. Mirrors the render geometry so
+    // click hit-testing lines up exactly with what the user sees.
+    fn keybind_help_text_area(&self) -> Option<Rect> {
+        let body = self.keybind_help_body_rect()?;
+        let metrics = self.keybind_help_scroll_metrics()?;
+        let text_area = match crate::ui::release_notes_scrollbar_rect(body, metrics) {
+            Some(_) => Rect::new(body.x, body.y, body.width.saturating_sub(1), body.height),
+            None => body,
+        };
+        Some(text_area)
+    }
+
+    // Map a screen coordinate to the clickable keybinds row under it, returning
+    // the row index (for hover highlighting) and its action. Honors the current
+    // scroll offset and per-row line wrapping so the math matches the rendered
+    // layout. Returns `None` for headings, blank rows, and empty space.
+    fn keybind_help_entry_at(&self, col: u16, row: u16) -> Option<(usize, KeybindHelpAction)> {
+        let text_area = self.keybind_help_text_area()?;
+        if !(col >= text_area.x
+            && col < text_area.x + text_area.width
+            && row >= text_area.y
+            && row < text_area.y + text_area.height)
+        {
+            return None;
+        }
+        let wrap_width = text_area.width.max(1) as usize;
+        let target_row = self.keybind_help.scroll as usize + (row - text_area.y) as usize;
+        let mut cursor = 0usize;
+        for (idx, help_row) in crate::ui::keybind_help_rows(self).into_iter().enumerate() {
+            let rows = help_row.width.max(1).div_ceil(wrap_width);
+            if target_row < cursor + rows {
+                return help_row.action.map(|action| (idx, action));
+            }
+            cursor += rows;
+        }
+        None
+    }
+
+    // The action to run for a click at the given coordinate, if the row is
+    // clickable.
+    fn keybind_help_action_at(&self, col: u16, row: u16) -> Option<KeybindHelpAction> {
+        self.keybind_help_entry_at(col, row)
+            .map(|(_, action)| action)
+    }
+
+    // Update which clickable row is highlighted as the mouse moves over (or
+    // scrolls within) the keybinds overlay.
+    fn update_keybind_help_hover(&mut self, col: u16, row: u16) {
+        self.keybind_help.hovered = self.keybind_help_entry_at(col, row).map(|(idx, _)| idx);
     }
 }
 
@@ -776,5 +885,119 @@ mod tests {
                 .release_notes_scrollbar_target_at(track.x, track.y),
             Some(ScrollbarClickTarget::Thumb { .. } | ScrollbarClickTarget::Track { .. })
         ));
+    }
+
+    // Build an app whose keybinds overlay is open with enough screen room for
+    // the full 76x22 modal to render unclamped.
+    fn app_with_keybind_help() -> App {
+        let mut app = app_for_mouse_test();
+        app.state.view.sidebar_rect = Rect::new(0, 0, 26, 40);
+        app.state.view.terminal_area = Rect::new(26, 0, 80, 40);
+        app.state.mode = Mode::KeybindHelp;
+        app.state.keybind_help.scroll = 0;
+        app.state.keybind_help.hovered = None;
+        app
+    }
+
+    // Resolve the on-screen click coordinate of the row carrying `want`, given
+    // the current scroll offset. Panics if the action isn't currently visible.
+    fn keybind_help_row_screen_pos(app: &App, want: KeybindHelpAction) -> (u16, u16) {
+        let text_area = app.state.keybind_help_text_area().expect("text area");
+        let wrap_width = text_area.width.max(1) as usize;
+        let scroll = app.state.keybind_help.scroll as usize;
+        let mut cursor = 0usize;
+        for row in crate::ui::keybind_help_rows(&app.state) {
+            let rows = row.width.max(1).div_ceil(wrap_width);
+            if row.action == Some(want) {
+                assert!(
+                    cursor >= scroll && cursor < scroll + text_area.height as usize,
+                    "target row is scrolled out of the viewport"
+                );
+                let visual = (cursor - scroll) as u16;
+                return (text_area.x + 1, text_area.y + visual);
+            }
+            cursor += rows;
+        }
+        panic!("action not found in keybind help rows");
+    }
+
+    #[test]
+    fn clicking_keybind_help_settings_row_opens_settings() {
+        let mut app = app_with_keybind_help();
+
+        let (col, row) = keybind_help_row_screen_pos(
+            &app,
+            KeybindHelpAction::Navigate(NavigateAction::Settings),
+        );
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+
+        assert_eq!(app.state.mode, Mode::Settings);
+    }
+
+    #[test]
+    fn clicking_keybind_help_heading_row_keeps_overlay_open() {
+        let mut app = app_with_keybind_help();
+
+        // The first rendered row is the "global" group heading, which is not
+        // clickable; clicking it must not run anything or close the overlay.
+        let text_area = app.state.keybind_help_text_area().unwrap();
+        assert_eq!(
+            app.state
+                .keybind_help_action_at(text_area.x + 1, text_area.y),
+            None
+        );
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            text_area.x + 1,
+            text_area.y,
+        ));
+
+        assert_eq!(app.state.mode, Mode::KeybindHelp);
+    }
+
+    #[test]
+    fn clicking_keybind_help_custom_command_row_runs_it_and_closes() {
+        let mut app = app_with_keybind_help();
+        app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
+            bindings: crate::config::ActionKeybinds::prefix("alt+g"),
+            label: "prefix+alt+g".into(),
+            command: "true".into(),
+            action: crate::config::CustomCommandAction::Shell,
+            description: Some("run true".into()),
+        }];
+        // The custom group renders at the bottom of the list, so scroll there.
+        app.state.keybind_help.scroll = app.state.keybind_help_max_scroll();
+
+        let want = KeybindHelpAction::CustomCommand(0);
+        let (col, row) = keybind_help_row_screen_pos(&app, want);
+        assert_eq!(app.state.keybind_help_action_at(col, row), Some(want));
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+
+        // The click dispatched the command and dismissed the overlay; a launch
+        // failure would surface as a toast.
+        assert_ne!(app.state.mode, Mode::KeybindHelp);
+        assert!(app
+            .state
+            .toast
+            .as_ref()
+            .map_or(true, |toast| toast.title != "custom command failed"));
+    }
+
+    #[test]
+    fn hovering_keybind_help_highlights_only_clickable_rows() {
+        let mut app = app_with_keybind_help();
+
+        let (col, row) = keybind_help_row_screen_pos(
+            &app,
+            KeybindHelpAction::Navigate(NavigateAction::Settings),
+        );
+        app.handle_mouse(mouse(MouseEventKind::Moved, col, row));
+        assert!(app.state.keybind_help.hovered.is_some());
+
+        // Moving onto the non-clickable heading clears the highlight.
+        let text_area = app.state.keybind_help_text_area().unwrap();
+        app.handle_mouse(mouse(MouseEventKind::Moved, text_area.x + 1, text_area.y));
+        assert_eq!(app.state.keybind_help.hovered, None);
     }
 }
