@@ -1172,6 +1172,9 @@ pub struct ProductAnnouncementState {
 
 pub struct KeybindHelpState {
     pub scroll: u16,
+    /// Index (into `keybind_help_rows`) of the clickable row under the mouse,
+    /// used to draw the hover highlight. `None` when no clickable row is hovered.
+    pub hovered: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1549,7 +1552,10 @@ impl AppState {
             name_input_replace_on_type: false,
             release_notes: None,
             product_announcement: None,
-            keybind_help: KeybindHelpState { scroll: 0 },
+            keybind_help: KeybindHelpState {
+                scroll: 0,
+                hovered: None,
+            },
             navigator: NavigatorState::default(),
             copy_mode: None,
             workspace_scroll: 0,

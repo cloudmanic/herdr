@@ -96,6 +96,7 @@ pub(super) fn open_global_menu(state: &mut AppState) {
 
 pub(super) fn open_keybind_help(state: &mut AppState) {
     state.keybind_help.scroll = 0;
+    state.keybind_help.hovered = None;
     state.mode = Mode::KeybindHelp;
 }
 
