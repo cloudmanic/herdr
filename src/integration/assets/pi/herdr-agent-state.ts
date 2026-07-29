@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=2
+// HERDR_INTEGRATION_VERSION=3
 // @ts-nocheck
 
 import { createConnection } from "node:net";
@@ -71,6 +71,18 @@ function parseDurationEnv(name: string, fallback: number): number {
     return fallback;
   }
   return parsed;
+}
+
+function flushSessionBeforeReport(ctx: any): void {
+  try {
+    // Pi normally defers creating a session file until the first assistant
+    // response. External resume needs the initial model/thinking state on disk
+    // before we advertise the path to Herdr. Optional for older Pi versions.
+    ctx?.sessionManager?.flush?.();
+  } catch {
+    // Session reporting must remain best-effort; an unsupported or failed flush
+    // must not break Pi startup or Herdr state reporting.
+  }
 }
 
 function updateSessionRef(ctx: any): void {
@@ -251,6 +263,7 @@ export default function (pi) {
   }
 
   pi.on("session_start", (_event, ctx) => {
+    flushSessionBeforeReport(ctx);
     updateSessionRef(ctx);
     publishState(true);
   });
