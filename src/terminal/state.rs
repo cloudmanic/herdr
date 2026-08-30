@@ -234,6 +234,44 @@ impl TerminalState {
         }
     }
 
+    pub fn clear_agent_identity_after_confirmed_process_miss(
+        &mut self,
+        observed_at: Instant,
+    ) -> Option<TerminalStateMutation> {
+        if !self.hook_authority_not_newer_than(observed_at) {
+            return None;
+        }
+
+        let previous_agent_label = self.effective_agent_label().map(str::to_string);
+        let previous_known_agent = self.effective_known_agent();
+        let previous_state = self.state;
+        let previous_presentation =
+            self.effective_presentation_for_state_at(previous_state, observed_at);
+        let previous_session = self.current_session_identity_for_persistence();
+
+        self.detected_agent = None;
+        self.fallback_state = AgentState::Unknown;
+        self.fallback_visible_blocker = false;
+        self.fallback_visible_idle = false;
+        self.fallback_visible_working = false;
+        self.fallback_observed_at = Some(observed_at);
+        self.hook_authority = None;
+        self.stale_hook_idle_since = None;
+        self.persisted_agent_session = None;
+
+        Some(TerminalStateMutation {
+            effective_state_change: self.recompute_effective_state(
+                previous_agent_label,
+                previous_known_agent,
+                previous_state,
+                previous_presentation,
+                observed_at,
+            ),
+            session_ref_changed: previous_session
+                != self.current_session_identity_for_persistence(),
+        })
+    }
+
     #[cfg(test)]
     pub fn set_hook_authority(
         &mut self,
@@ -1522,6 +1560,20 @@ mod tests {
         assert_eq!(terminal.fallback_state, AgentState::Unknown);
         assert_eq!(terminal.effective_agent_label(), None);
         assert_eq!(terminal.state, AgentState::Unknown);
+    }
+
+    #[test]
+    fn confirmed_missing_process_probe_clears_hook_identity_without_conflicting_agent() {
+        let mut terminal = test_terminal();
+        terminal.set_hook_authority("herdr:pi".into(), "pi".into(), AgentState::Idle, None, None);
+
+        let mutation = terminal
+            .clear_agent_identity_after_confirmed_process_miss(Instant::now())
+            .expect("stale identity should be cleared");
+
+        assert!(mutation.effective_state_change.is_some());
+        assert_eq!(terminal.effective_agent_label(), None);
+        assert!(!terminal.is_agent_terminal());
     }
 
     #[test]

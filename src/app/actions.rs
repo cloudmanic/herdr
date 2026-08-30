@@ -2032,6 +2032,15 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
+            AppEvent::AgentPresenceConfirmedMissing {
+                pane_id,
+                observed_at,
+            } => self
+                .update_terminal_state(pane_id, |terminal| {
+                    terminal.clear_agent_identity_after_confirmed_process_miss(observed_at)
+                })
+                .into_iter()
+                .collect(),
             AppEvent::HookStateReported {
                 pane_id,
                 source,

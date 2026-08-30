@@ -1475,6 +1475,44 @@ mod tests {
         )
     }
 
+    #[test]
+    fn non_agent_tui_is_absent_from_agent_list_after_restore_identity_decay() {
+        let mut app = test_app();
+        app.state.workspaces.push(Workspace::test_new("lazygit"));
+        app.state.ensure_test_terminals();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0]
+            .pane_state(pane_id)
+            .expect("test pane should exist")
+            .attached_terminal_id
+            .clone();
+
+        assert!(
+            app.collect_agent_infos().is_empty(),
+            "fresh TUI is not an agent"
+        );
+
+        let terminal = app
+            .state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist");
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_hook_authority("herdr:pi".into(), "pi".into(), AgentState::Idle, None, None);
+        assert_eq!(app.collect_agent_infos().len(), 1);
+
+        app.state
+            .handle_app_event(AppEvent::AgentPresenceConfirmedMissing {
+                pane_id,
+                observed_at: Instant::now(),
+            });
+
+        assert!(
+            app.collect_agent_infos().is_empty(),
+            "a non-agent TUI must leave the agents section after restore validation"
+        );
+    }
+
     #[derive(Clone, Default)]
     struct FakePrefixInputSource {
         switch_calls: Rc<Cell<usize>>,
