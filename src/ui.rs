@@ -92,11 +92,12 @@ const COLLAPSED_WIDTH: u16 = 4; // num + space + dot + separator
 
 // Braille spinner frames — smooth rotation
 const SPINNERS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_TICKS_PER_FRAME: u32 = 8;
 
 /// Map spinner_tick (incremented every frame at ~60fps) to a spinner frame.
 /// We want ~8 updates/sec so divide by 8.
 pub(super) fn spinner_frame(tick: u32) -> &'static str {
-    SPINNERS[(tick as usize / 8) % SPINNERS.len()]
+    SPINNERS[(tick as usize / SPINNER_TICKS_PER_FRAME as usize) % SPINNERS.len()]
 }
 
 /// Compute view geometry and reconcile pane sizes.

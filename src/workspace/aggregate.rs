@@ -22,11 +22,13 @@ pub struct PaneDetail {
 }
 
 impl Tab {
-    pub fn has_working_pane(&self, terminals: &HashMap<TerminalId, TerminalState>) -> bool {
+    pub fn has_animated_pane(&self, terminals: &HashMap<TerminalId, TerminalState>) -> bool {
         self.panes.values().any(|pane| {
             terminals
                 .get(&pane.attached_terminal_id)
-                .is_some_and(|terminal| terminal.state == AgentState::Working)
+                .is_some_and(|terminal| {
+                    matches!(terminal.state, AgentState::Working | AgentState::Blocked)
+                })
         })
     }
 
@@ -90,8 +92,8 @@ impl Workspace {
             .unwrap_or((AgentState::Unknown, true))
     }
 
-    pub fn has_working_pane(&self, terminals: &HashMap<TerminalId, TerminalState>) -> bool {
-        self.tabs.iter().any(|tab| tab.has_working_pane(terminals))
+    pub fn has_animated_pane(&self, terminals: &HashMap<TerminalId, TerminalState>) -> bool {
+        self.tabs.iter().any(|tab| tab.has_animated_pane(terminals))
     }
 
     pub fn pane_details(&self, terminals: &HashMap<TerminalId, TerminalState>) -> Vec<PaneDetail> {
