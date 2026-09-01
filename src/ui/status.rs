@@ -171,7 +171,14 @@ pub(super) fn agent_icon(
     p: &Palette,
 ) -> (&'static str, Style) {
     match (state, seen) {
-        (AgentState::Blocked, _) => ("◉", Style::default().fg(p.red)),
+        (AgentState::Blocked, _) => {
+            let icon = if (tick / super::SPINNER_TICKS_PER_FRAME).is_multiple_of(2) {
+                "◉"
+            } else {
+                "○"
+            };
+            (icon, Style::default().fg(p.red))
+        }
         (AgentState::Working, _) => (super::spinner_frame(tick), Style::default().fg(p.yellow)),
         (AgentState::Idle, false) => ("●", Style::default().fg(p.teal)),
         (AgentState::Idle, true) => ("✓", Style::default().fg(p.green)),
@@ -196,5 +203,37 @@ pub(super) fn state_label_color(state: AgentState, seen: bool, p: &Palette) -> C
         (AgentState::Idle, false) => p.teal,
         (AgentState::Idle, true) => p.green,
         (AgentState::Unknown, _) => p.overlay0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocked_agent_icon_alternates_with_spinner_tick() {
+        let palette = Palette::catppuccin();
+        let (visible, visible_style) = agent_icon(AgentState::Blocked, true, 0, &palette);
+        let (hollow, hollow_style) = agent_icon(AgentState::Blocked, true, 8, &palette);
+
+        assert_ne!(visible, hollow);
+        assert_eq!(visible_style.fg, Some(palette.red));
+        assert_eq!(hollow_style.fg, Some(palette.red));
+    }
+
+    #[test]
+    fn non_blocked_agent_icons_keep_existing_rendering() {
+        let palette = Palette::catppuccin();
+
+        assert_eq!(agent_icon(AgentState::Working, true, 0, &palette).0, "⠋");
+        assert_eq!(agent_icon(AgentState::Working, true, 8, &palette).0, "⠙");
+        for (state, seen, expected) in [
+            (AgentState::Idle, false, "●"),
+            (AgentState::Idle, true, "✓"),
+            (AgentState::Unknown, true, "○"),
+        ] {
+            assert_eq!(agent_icon(state, seen, 0, &palette).0, expected);
+            assert_eq!(agent_icon(state, seen, 1, &palette).0, expected);
+        }
     }
 }

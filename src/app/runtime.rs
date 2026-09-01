@@ -311,12 +311,12 @@ impl App {
                 .state
                 .active
                 .and_then(|idx| self.state.workspaces.get(idx))
-                .is_some_and(|ws| ws.has_working_pane(&self.state.terminals)),
+                .is_some_and(|ws| ws.has_animated_pane(&self.state.terminals)),
             crate::app::state::AgentPanelScope::AllWorkspaces => self
                 .state
                 .workspaces
                 .iter()
-                .any(|ws| ws.has_working_pane(&self.state.terminals)),
+                .any(|ws| ws.has_animated_pane(&self.state.terminals)),
         }
     }
 
@@ -646,6 +646,34 @@ mod tests {
             is_focused: true,
         });
         (app, pane_id)
+    }
+
+    #[test]
+    fn blocked_pane_keeps_agent_animation_timer_running() {
+        let (mut app, pane_id) = test_app_with_pane();
+        app.state.ensure_test_terminals();
+        let terminal_id = app.state.workspaces[0]
+            .pane_state(pane_id)
+            .expect("test pane should exist")
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist")
+            .state = crate::detect::AgentState::Blocked;
+
+        assert!(app.agent_panel_has_animation());
+        app.sync_animation_timer(Instant::now());
+        assert!(app.next_animation_tick.is_some());
+
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist")
+            .state = crate::detect::AgentState::Idle;
+        app.sync_animation_timer(Instant::now());
+        assert!(app.next_animation_tick.is_none());
     }
 
     #[test]
