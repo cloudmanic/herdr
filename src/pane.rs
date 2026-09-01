@@ -111,6 +111,26 @@ async fn publish_state_changed_event(
     }
 }
 
+async fn publish_agent_presence_confirmed_missing(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    observed_at: std::time::Instant,
+) {
+    if let Err(e) = state_events
+        .send(AppEvent::AgentPresenceConfirmedMissing {
+            pane_id,
+            observed_at,
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver confirmed missing agent event"
+        );
+    }
+}
+
 const AGENT_MISS_CONFIRMATION_ATTEMPTS: u8 = 6;
 const PROCESS_RECHECK_IDENTIFIED: std::time::Duration = std::time::Duration::from_secs(5);
 const PROCESS_RECHECK_MISSING_FOREGROUND_GROUP: std::time::Duration =
@@ -194,6 +214,7 @@ struct ProcessProbeInput {
     foreground_pgid: Option<u32>,
     last_foreground_pgid: Option<u32>,
     has_process_probe: bool,
+    consecutive_misses: u8,
     acquisition_age: Option<std::time::Duration>,
     pending_foreground_shell_clear: bool,
     pending_restore_probe: bool,
@@ -231,6 +252,12 @@ fn should_probe_foreground_job(input: ProcessProbeInput) -> bool {
         {
             return true;
         }
+    }
+
+    if input.consecutive_misses > 0 {
+        return !input.has_process_probe
+            || foreground_group_changed
+            || input.elapsed_since_process_check >= PROCESS_RECHECK_IDENTIFIED;
     }
 
     if input.current_agent.is_none() {
@@ -455,9 +482,6 @@ fn spawn_basic_detection_task(
             let content = terminal.detection_text();
             let content_changed = content != last_detection_text;
             last_detection_text.clone_from(&content);
-            if crate::detect::should_skip_state_update(agent, &content) {
-                continue;
-            }
 
             let foreground_pgid = (pid > 0)
                 .then(|| crate::detect::foreground_process_group_id(pid))
@@ -480,6 +504,7 @@ fn spawn_basic_detection_task(
                     foreground_pgid,
                     last_foreground_pgid,
                     has_process_probe,
+                    consecutive_misses: agent_presence.consecutive_misses,
                     acquisition_age: acquisition_started_at
                         .map(|started| now.duration_since(started)),
                     pending_foreground_shell_clear: false,
@@ -515,6 +540,14 @@ fn spawn_basic_detection_task(
                     agent = agent_presence.current_agent();
                     agent_changed = previous_agent != agent;
                 }
+                if agent_presence.process_probe_confirmed_missing() {
+                    publish_agent_presence_confirmed_missing(state_events.clone(), pane_id, now)
+                        .await;
+                }
+            }
+
+            if crate::detect::should_skip_state_update(agent, &content) {
+                continue;
             }
 
             let Some(detection) = detection_update_for_publish(agent, &content, false) else {
@@ -612,19 +645,22 @@ impl AgentDetectionPresence {
                 true
             }
             None => {
-                if self.current_agent.is_none() {
-                    self.consecutive_misses = 0;
-                    return false;
-                }
                 self.consecutive_misses = self.consecutive_misses.saturating_add(1);
                 if self.consecutive_misses < AGENT_MISS_CONFIRMATION_ATTEMPTS {
                     return false;
                 }
-                self.current_agent = None;
-                self.consecutive_misses = 0;
-                true
+                if self.current_agent.is_some() {
+                    self.current_agent = None;
+                    true
+                } else {
+                    false
+                }
             }
         }
+    }
+
+    fn process_probe_confirmed_missing(&self) -> bool {
+        self.consecutive_misses >= AGENT_MISS_CONFIRMATION_ATTEMPTS
     }
 }
 
@@ -1564,9 +1600,6 @@ impl PaneRuntime {
                     let content = terminal.detection_text();
                     let content_changed = content != last_detection_text;
                     last_detection_text.clone_from(&content);
-                    if detect::should_skip_state_update(agent_presence.current_agent(), &content) {
-                        continue;
-                    }
                     let foreground_pgid = (pid > 0)
                         .then(|| detect::foreground_process_group_id(pid))
                         .flatten();
@@ -1588,6 +1621,7 @@ impl PaneRuntime {
                             foreground_pgid,
                             last_foreground_pgid,
                             has_process_probe,
+                            consecutive_misses: agent_presence.consecutive_misses,
                             acquisition_age: acquisition_started_at
                                 .map(|started| now.duration_since(started)),
                             pending_foreground_shell_clear,
@@ -1676,7 +1710,19 @@ impl PaneRuntime {
                                 }
                                 agent_changed = true;
                             }
+                            if agent_presence.process_probe_confirmed_missing() {
+                                publish_agent_presence_confirmed_missing(
+                                    state_events.clone(),
+                                    pane_id,
+                                    now,
+                                )
+                                .await;
+                            }
                         }
+                    }
+
+                    if detect::should_skip_state_update(agent, &content) {
+                        continue;
                     }
 
                     let pid = child_pid.load(Ordering::Acquire);
@@ -2678,6 +2724,7 @@ mod tests {
             foreground_pgid: Some(42),
             last_foreground_pgid: Some(42),
             has_process_probe: true,
+            consecutive_misses: 0,
             acquisition_age: None,
             pending_foreground_shell_clear: false,
             pending_restore_probe: false,
@@ -2688,6 +2735,21 @@ mod tests {
     #[test]
     fn unchanged_unidentified_foreground_group_skips_full_process_probe() {
         assert!(!should_probe_foreground_job(process_probe_input()));
+    }
+
+    #[test]
+    fn confirmed_missing_presence_keeps_periodic_process_probe_alive() {
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            consecutive_misses: 1,
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED
+                - std::time::Duration::from_millis(1),
+            ..process_probe_input()
+        }));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            consecutive_misses: AGENT_MISS_CONFIRMATION_ATTEMPTS,
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+            ..process_probe_input()
+        }));
     }
 
     #[test]
@@ -3022,12 +3084,51 @@ mod tests {
                 !changed,
                 "miss {attempt} should stay in the confirmation window"
             );
+            assert!(!presence.process_probe_confirmed_missing());
             assert_eq!(presence.current_agent(), Some(Agent::Pi));
         }
 
         let changed = presence.observe_process_probe(None);
         assert!(changed, "last confirmation miss should clear the agent");
+        assert!(presence.process_probe_confirmed_missing());
         assert_eq!(presence.current_agent(), None);
+    }
+
+    #[test]
+    fn no_agent_presence_reaches_confirmation_without_a_conflicting_agent() {
+        let mut presence = AgentDetectionPresence::from_agent(None);
+
+        for attempt in 1..AGENT_MISS_CONFIRMATION_ATTEMPTS {
+            assert!(!presence.observe_process_probe(None), "miss {attempt}");
+            assert!(!presence.process_probe_confirmed_missing());
+        }
+
+        assert!(!presence.observe_process_probe(None));
+        assert!(presence.process_probe_confirmed_missing());
+        assert_eq!(presence.current_agent(), None);
+    }
+
+    #[test]
+    fn confirmed_missing_presence_clears_stale_hook_identity() {
+        let mut terminal = crate::terminal::TerminalState::new(
+            crate::terminal::TerminalId::alloc(),
+            "/tmp".into(),
+        );
+        terminal.set_hook_authority("herdr:pi".into(), "pi".into(), AgentState::Idle, None, None);
+        let mut presence = AgentDetectionPresence::from_agent(None);
+
+        for attempt in 1..AGENT_MISS_CONFIRMATION_ATTEMPTS {
+            assert!(!presence.observe_process_probe(None), "miss {attempt}");
+            assert!(!presence.process_probe_confirmed_missing());
+        }
+        assert!(!presence.observe_process_probe(None));
+        assert!(presence.process_probe_confirmed_missing());
+        terminal
+            .clear_agent_identity_after_confirmed_process_miss(std::time::Instant::now())
+            .expect("confirmed process miss should clear stale identity");
+
+        assert_eq!(terminal.effective_agent_label(), None);
+        assert!(!terminal.is_agent_terminal());
     }
 
     #[tokio::test]

@@ -38,6 +38,11 @@ pub enum AppEvent {
         process_exited: bool,
         observed_at: Instant,
     },
+    /// The process probe confirmed that no known agent owns the pane.
+    AgentPresenceConfirmedMissing {
+        pane_id: PaneId,
+        observed_at: Instant,
+    },
     /// Hook-authoritative agent state was reported for a pane.
     HookStateReported {
         pane_id: PaneId,
